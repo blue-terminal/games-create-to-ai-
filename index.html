@@ -87,15 +87,15 @@
       }
       
       #minimap {
-        background: rgba(0, 20, 40, 0.8);
+        background: #0f172a;
         border: 2px solid #3b82f6;
         border-radius: 50%;
         box-shadow: 0 0 20px rgba(59, 130, 246, 0.4);
       }
 
       #fullmap-overlay {
-        background: rgba(0, 10, 20, 0.95);
-        z-index: 40;
+        background: rgba(10, 15, 30, 0.98);
+        z-index: 100;
         pointer-events: auto;
       }
     </style>
@@ -812,16 +812,18 @@
           // 7. Render Loop
           const drawMap = (ctx, width, height, scale) => {
               const { player, buildings, traffic, shops, train } = gameState.current;
-              ctx.clearRect(0,0,width,height);
+              // Clear with semi-transparent black
+              ctx.fillStyle = "rgba(0, 20, 40, 0.9)";
+              ctx.fillRect(0,0,width,height);
               ctx.save();
               ctx.translate(width/2, height/2);
               
               // Player
-              ctx.fillStyle = 'white';
+              ctx.fillStyle = '#ffffff';
               ctx.beginPath(); ctx.arc(0,0, scale * 8, 0, Math.PI*2); ctx.fill();
               
               // Buildings
-              ctx.fillStyle = '#556677';
+              ctx.fillStyle = '#64748b'; // Brighter grey
               for(const b of buildings) {
                   const rx = (b.x - player.position.x) * scale;
                   const ry = (b.z - player.position.z) * scale;
@@ -834,7 +836,7 @@
                   const rx = (t.mesh.position.x - player.position.x) * scale;
                   const ry = (t.mesh.position.z - player.position.z) * scale;
                   if (Math.abs(rx) > width/2 || Math.abs(ry) > height/2) continue;
-                  ctx.fillStyle = t.isPolice ? 'red' : 'cyan';
+                  ctx.fillStyle = t.isPolice ? '#ff4444' : '#00ffff';
                   ctx.beginPath(); ctx.arc(rx, ry, scale * 6, 0, Math.PI*2); ctx.fill();
               }
 
@@ -843,7 +845,7 @@
                   const rx = (s.position.x - player.position.x) * scale;
                   const ry = (s.position.z - player.position.z) * scale;
                   if (Math.abs(rx) > width/2 || Math.abs(ry) > height/2) continue;
-                  ctx.fillStyle = s.type === 'BANK' ? 'gold' : 'lightgreen';
+                  ctx.fillStyle = s.type === 'BANK' ? '#fbbf24' : '#4ade80';
                   const sz = scale * 12;
                   ctx.fillRect(rx-sz/2, ry-sz/2, sz, sz);
               }
@@ -852,7 +854,7 @@
               const tx = (train.position.x - player.position.x) * scale;
               const ty = (train.position.z - player.position.z) * scale;
               if (Math.abs(tx) <= width/2 && Math.abs(ty) <= height/2) {
-                  ctx.fillStyle = 'orange';
+                  ctx.fillStyle = '#f97316';
                   const sz = scale * 16;
                   ctx.fillRect(tx-sz/2, ty-sz/2, sz, sz);
               }
@@ -1020,7 +1022,7 @@
              } else if (inPlane) {
                  const speed = gameState.current.planeSpeed;
                  if (keys['KeyW']) gameState.current.planeSpeed += 0.01; if (keys['KeyS']) gameState.current.planeSpeed -= 0.01; gameState.current.planeSpeed*=0.995;
-                 const yaw = keys['KeyA'] ? 0.02 : (keys['KeyD'] ? -0.02 : 0);
+                 const yaw = keys['KeyA'] ? -0.02 : (keys['KeyD'] ? 0.02 : 0); // Inverted A/D for Plane
                  plane.rotation.y += yaw;
                  plane.rotation.z = THREE.MathUtils.lerp(plane.rotation.z, yaw * -20, 0.1);
                  plane.position.y += (speed - 0.3) * 0.5;
@@ -1034,7 +1036,13 @@
                  gameState.current.camera.lookAt(plane.position);
              } else if (inCar) {
                  if (keys['KeyW']) gameState.current.carVelocity += 0.02; if (keys['KeyS']) gameState.current.carVelocity -= 0.02; gameState.current.carVelocity *= 0.98;
-                 if (Math.abs(gameState.current.carVelocity) > 0.01) { car.rotation.y += (keys['KeyA']?0.03:-0.03)*(gameState.current.carVelocity>0?1:-1) * (keys['KeyA']||keys['KeyD']?1:0); }
+                 // Inverted A/D for Car: A -> -0.03 (Right Turn? No -Z... wait logic below)
+                 // Original: (keys['KeyA']?0.03:-0.03) -> A adds Rotation.
+                 // New: A should subtract Rotation.
+                 if (Math.abs(gameState.current.carVelocity) > 0.01) { 
+                     const turn = (keys['KeyA'] ? -0.03 : (keys['KeyD'] ? 0.03 : 0));
+                     car.rotation.y += turn * (gameState.current.carVelocity > 0 ? 1 : -1); 
+                 }
                  const fwd = new THREE.Vector3(0,0,1).applyAxisAngle(new THREE.Vector3(0,1,0), car.rotation.y);
                  car.position.add(fwd.multiplyScalar(gameState.current.carVelocity));
                  
@@ -1065,7 +1073,8 @@
              } else {
                  const speed = keys['ShiftLeft'] ? CONFIG.PLAYER_RUN_SPEED : CONFIG.PLAYER_SPEED;
                  const dir = new THREE.Vector3();
-                 if (keys['KeyW']) dir.z -= 1; if (keys['KeyS']) dir.z += 1; if (keys['KeyA']) dir.x -= 1; if (keys['KeyD']) dir.x += 1;
+                 // Inverted: A is Right (+X), D is Left (-X)
+                 if (keys['KeyW']) dir.z -= 1; if (keys['KeyS']) dir.z += 1; if (keys['KeyA']) dir.x += 1; if (keys['KeyD']) dir.x -= 1;
                  
                  // Jump
                  if (keys['Space']) {
@@ -1159,8 +1168,8 @@
                      <div className="flex gap-8 mt-6 text-white font-mono text-xl">
                          <div className="flex items-center gap-2"><div className="w-4 h-4 bg-white rounded-full"></div> YOU</div>
                          <div className="flex items-center gap-2"><div className="w-4 h-4 bg-red-500 rounded-full"></div> POLICE</div>
-                         <div className="flex items-center gap-2"><div className="w-4 h-4 bg-gold-500 bg-yellow-400"></div> BANK</div>
-                         <div className="flex items-center gap-2"><div className="w-4 h-4 bg-green-400"></div> STORE</div>
+                         <div className="flex items-center gap-2"><div className="w-4 h-4 bg-yellow-400 rounded-full"></div> BANK</div>
+                         <div className="flex items-center gap-2"><div className="w-4 h-4 bg-green-400 rounded-full"></div> STORE</div>
                      </div>
                      <div className="mt-8 text-white/50">PRESS M TO CLOSE</div>
                  </div>
