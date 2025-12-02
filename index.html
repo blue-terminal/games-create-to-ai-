@@ -92,6 +92,12 @@
         border-radius: 50%;
         box-shadow: 0 0 20px rgba(59, 130, 246, 0.4);
       }
+
+      #fullmap-overlay {
+        background: rgba(0, 10, 20, 0.95);
+        z-index: 40;
+        pointer-events: auto;
+      }
     </style>
     <script type="importmap">
 {
@@ -100,8 +106,8 @@
     "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
     "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
     "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
     "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
     "recharts": "https://aistudiocdn.com/recharts@^3.5.1",
     "d3": "https://aistudiocdn.com/d3@^7.9.0"
   }
@@ -208,7 +214,9 @@
       const Game = () => {
         const mountRef = useRef(null);
         const minimapRef = useRef(null);
+        const fullMapRef = useRef(null);
 
+        // UI State (For Rendering Only)
         const [hudState, setHudState] = useState({
           inCar: false,
           inTrain: false,
@@ -223,9 +231,11 @@
           cash: 500,
           isRobbing: false,
           robberyProgress: 0,
-          cameraMode: 'THIRD_PERSON'
+          cameraMode: 'THIRD_PERSON',
+          showFullMap: false
         });
 
+        // Game Logic State (Mutable Refs for Loop)
         const gameState = useRef({
           scene: null,
           camera: null,
@@ -242,38 +252,46 @@
           carVelocity: 0,
           planeSpeed: 0,
           planeYVelocity: 0,
+          playerYVelocity: 0,
           
+          // Logic Flags
           inCar: false,
           inTrain: false,
           inPlane: false,
+          isRobbing: false,
+          robberyTimer: 0,
+          currentRobberyShop: null,
+          
+          // Stats
+          health: 100,
+          wantedLevel: 0,
+          crimeScore: 0,
+          cash: 500,
+          wasted: false,
           
           colliders: [], // Boxes
           traffic: [], 
           npcs: [], 
           trafficLights: [],
-          projectiles: [], // {mesh, velocity, life, owner: 'player'|'enemy'}
-          particles: [], // {mesh, velocity, life}
+          projectiles: [], 
+          particles: [], 
           
           train: null,
           trainProgress: 0.595, // Start at station
           trainSpeed: 0,
           trainStopped: true,
           trainStopTimer: 0,
+          trainHasStopped: false,
           
           roadNodes: [],
           sidewalkNodes: [],
           shops: [],
+          buildings: [],
           
-          crimeScore: 0,
           lastShot: 0,
           lastEnemyShot: 0,
           cameraModeIndex: 0,
           heliSpawned: false,
-          
-          currentRobberyShop: null,
-          robberyTimer: 0,
-          
-          buildings: [] // For minimap
         });
 
         useEffect(() => {
@@ -649,18 +667,26 @@
           const hSpot = new THREE.SpotLight(0xffffff,5,100,0.5,0.5); hSpot.position.set(0,-1,1); hSpot.target.position.set(0,-20,0); heliGroup.add(hSpot); heliGroup.add(hSpot.target);
           gameState.current.heli = { mesh: heliGroup, rotor: hRotor, spot: hSpot, lastShot: 0 };
 
-          // 5. Input
+          // 5. Input Handlers (Synchronize with Game State)
           const handleKeyDown = (e) => {
-             if (hudState.wasted) return;
+             if (gameState.current.wasted) return;
+             
+             // Map Toggle
+             if (e.code === 'KeyM') {
+                 setHudState(p => ({...p, showFullMap: !p.showFullMap}));
+             }
+
              gameState.current.keys[e.code] = true;
+             
              if (e.code === 'KeyF') handleInteraction();
              if (e.code === 'KeyE') handleMissionAction();
              if (e.code === 'KeyC') toggleCamera();
              if (e.code === 'KeyR') toggleRadio();
              if (e.code === 'Space' && !gameState.current.inCar && !gameState.current.inPlane) shoot('player');
           };
+          
           const handleKeyUp = (e) => gameState.current.keys[e.code] = false;
-          const handleMouseDown = () => { if(!gameState.current.inCar && !gameState.current.inPlane && !hudState.wasted) shoot('player'); };
+          const handleMouseDown = () => { if(!gameState.current.inCar && !gameState.current.inPlane && !gameState.current.wasted) shoot('player'); };
 
           window.addEventListener('keydown', handleKeyDown); window.addEventListener('keyup', handleKeyUp); window.addEventListener('mousedown', handleMouseDown);
 
@@ -689,14 +715,12 @@
                   gameState.current.playerBodyParts.gun.getWorldPosition(startPos);
                   const camDir = new THREE.Vector3();
                   gameState.current.camera.getWorldDirection(camDir);
-                  // Shoot towards where camera looks (reticle), slightly adjusted from gun pos
                   const targetPoint = gameState.current.camera.position.clone().add(camDir.multiplyScalar(50));
                   vel = targetPoint.sub(startPos).normalize().multiplyScalar(4); 
                   
                   gameState.current.crimeScore += 5;
                   updateWantedLevel();
               } else {
-                  // Enemy
                   startPos.copy(origin);
                   vel.copy(direction).normalize().multiplyScalar(3);
               }
@@ -733,7 +757,7 @@
           };
 
           const handleMissionAction = () => {
-             if (hudState.isRobbing) return;
+             if (gameState.current.isRobbing) return;
              const { shops, player } = gameState.current;
              const shop = shops.find(s => player.position.distanceTo(s.position) < 15 && s.cooldown <= 0);
              if (shop) {
@@ -750,19 +774,19 @@
               const s = gameState.current.crimeScore;
               let l = 0;
               if (s > 10) l = 1; if (s > 50) l = 2; if (s > 100) l = 3; if (s > 200) l = 4; if (s > 500) l = 5;
+              gameState.current.wantedLevel = l;
               setHudState(p => ({...p, wantedLevel: l}));
           };
 
           const handleDamage = (amt) => {
-              if (hudState.wasted) return;
-              setHudState(p => {
-                  const nh = Math.max(0, p.health - amt);
-                  if (nh === 0) triggerWasted();
-                  return {...p, health: nh};
-              });
+              if (gameState.current.wasted) return;
+              gameState.current.health = Math.max(0, gameState.current.health - amt);
+              setHudState(p => ({...p, health: gameState.current.health}));
+              if (gameState.current.health <= 0) triggerWasted();
           };
 
           const triggerWasted = () => {
+              gameState.current.wasted = true;
               setHudState(p => ({...p, wasted: true}));
               gameState.current.isRobbing = false;
               setTimeout(() => {
@@ -772,22 +796,23 @@
                   car.position.set(20,0,110); car.rotation.y = Math.PI; car.hp = 100; car.mesh.visible = true;
                   plane.position.set(-20,0,110); plane.rotation.set(0,Math.PI,0);
                   gameState.current.crimeScore = 0;
+                  gameState.current.health = 100;
+                  gameState.current.wantedLevel = 0;
+                  gameState.current.wasted = false;
                   setHudState(p => ({...p, wasted: false, health: 100, wantedLevel: 0, speed: 0}));
               }, 4000);
           };
 
-          // 7. Loop
-          const drawMinimap = (ctx, width, height) => {
+          // 7. Render Loop
+          const drawMap = (ctx, width, height, scale) => {
               const { player, buildings, traffic, shops, train } = gameState.current;
               ctx.clearRect(0,0,width,height);
               ctx.save();
               ctx.translate(width/2, height/2);
               
-              const scale = 0.5;
-              
               // Player
               ctx.fillStyle = 'white';
-              ctx.beginPath(); ctx.arc(0,0, 4, 0, Math.PI*2); ctx.fill();
+              ctx.beginPath(); ctx.arc(0,0, scale * 8, 0, Math.PI*2); ctx.fill();
               
               // Buildings
               ctx.fillStyle = '#556677';
@@ -804,7 +829,7 @@
                   const ry = (t.mesh.position.z - player.position.z) * scale;
                   if (Math.abs(rx) > width/2 || Math.abs(ry) > height/2) continue;
                   ctx.fillStyle = t.isPolice ? 'red' : 'cyan';
-                  ctx.beginPath(); ctx.arc(rx, ry, 3, 0, Math.PI*2); ctx.fill();
+                  ctx.beginPath(); ctx.arc(rx, ry, scale * 6, 0, Math.PI*2); ctx.fill();
               }
 
               // Shops
@@ -813,7 +838,8 @@
                   const ry = (s.position.z - player.position.z) * scale;
                   if (Math.abs(rx) > width/2 || Math.abs(ry) > height/2) continue;
                   ctx.fillStyle = s.type === 'BANK' ? 'gold' : 'lightgreen';
-                  ctx.fillRect(rx-3, ry-3, 6, 6);
+                  const sz = scale * 12;
+                  ctx.fillRect(rx-sz/2, ry-sz/2, sz, sz);
               }
 
               // Train
@@ -821,22 +847,26 @@
               const ty = (train.position.z - player.position.z) * scale;
               if (Math.abs(tx) <= width/2 && Math.abs(ty) <= height/2) {
                   ctx.fillStyle = 'orange';
-                  ctx.fillRect(tx-4, ty-4, 8, 8);
+                  const sz = scale * 16;
+                  ctx.fillRect(tx-sz/2, ty-sz/2, sz, sz);
               }
 
               ctx.restore();
           };
 
           const update = () => {
-             if (hudState.wasted) { renderer.render(gameState.current.scene, gameState.current.camera); requestAnimationFrame(update); return; }
+             if (gameState.current.wasted) { renderer.render(gameState.current.scene, gameState.current.camera); requestAnimationFrame(update); return; }
              
              const dt = 0.016; 
-             const { player, car, inCar, keys, colliders, playerBodyParts, train, traffic, projectiles, trafficLights, npcs, inTrain, plane, inPlane, heli, scene, shops, particles } = gameState.current;
+             const { player, car, inCar, keys, colliders, playerBodyParts, train, traffic, projectiles, npcs, inTrain, plane, inPlane, heli, scene, shops, particles } = gameState.current;
 
              // Minimap
              if (minimapRef.current) {
-                 const ctx = minimapRef.current.getContext('2d');
-                 drawMinimap(ctx, minimapRef.current.width, minimapRef.current.height);
+                 drawMap(minimapRef.current.getContext('2d'), minimapRef.current.width, minimapRef.current.height, 0.5);
+             }
+             // Full Map
+             if (fullMapRef.current) {
+                 drawMap(fullMapRef.current.getContext('2d'), fullMapRef.current.width, fullMapRef.current.height, 0.15); // Smaller scale = zoomed out
              }
 
              // Robbery
@@ -851,7 +881,8 @@
                      if (gameState.current.robberyTimer >= dur) {
                          gameState.current.isRobbing = false; shop.cooldown = 60; shop.mesh.children.forEach(c=>c.visible=false);
                          gameState.current.crimeScore += (shop.type==='BANK'?200:50);
-                         setHudState(p => ({...p, isRobbing: false, cash: p.cash + (shop.type==='BANK'?5000:500), interactionText: 'SUCCESS'}));
+                         gameState.current.cash += (shop.type==='BANK'?5000:500);
+                         setHudState(p => ({...p, isRobbing: false, cash: gameState.current.cash, interactionText: 'SUCCESS'}));
                          updateWantedLevel();
                      }
                  }
@@ -869,7 +900,7 @@
              train.position.copy(tPos); train.lookAt(tPos.clone().add(trainCurve.getTangentAt(gameState.current.trainProgress)));
 
              // Heli AI
-             if (hudState.wantedLevel >= 3) {
+             if (gameState.current.wantedLevel >= 3) {
                  if (!gameState.current.heliSpawned) { scene.add(heli.mesh); heli.mesh.position.copy(player.position).add(new THREE.Vector3(0,100,0)); gameState.current.heliSpawned=true; }
                  const target = inCar ? car.position : (inPlane?plane.position:player.position);
                  heli.mesh.position.lerp(target.clone().add(new THREE.Vector3(20,40,20)), 0.02);
@@ -892,7 +923,7 @@
                      continue;
                  }
                  
-                 const wanted = hudState.wantedLevel;
+                 const wanted = gameState.current.wantedLevel;
                  if (wanted > 0 && !ai.isPolice && Math.random() < 0.0005 * wanted) { ai.isPolice = true; ai.siren.visible = true; ai.bodyMat.color.setHex(0x111111); ai.speed *= 1.5; }
                  
                  if (ai.isPolice) {
@@ -1014,7 +1045,6 @@
                  if (keys['KeyW']) dir.z -= 1; if (keys['KeyS']) dir.z += 1; if (keys['KeyA']) dir.x -= 1; if (keys['KeyD']) dir.x += 1;
                  
                  // Jump
-                 if (gameState.current.playerYVelocity === undefined) gameState.current.playerYVelocity = 0;
                  if (keys['Space']) {
                       if (player.position.y <= 0.1) gameState.current.playerYVelocity = 0.8;
                  }
@@ -1032,7 +1062,6 @@
                  // Camera logic
                  const camDist = 25;
                  const camHeight = 8;
-                 // Calculate offset based on player rotation to stay "behind"
                  const offset = new THREE.Vector3(0, camHeight, -camDist).applyQuaternion(player.quaternion);
                  gameState.current.camera.position.lerp(player.position.clone().add(offset), 0.1);
                  gameState.current.camera.lookAt(player.position.clone().add(new THREE.Vector3(0, 2, 0)));
@@ -1045,11 +1074,6 @@
                      if(s) msg = s.cooldown>0 ? 'CLOSED' : `PRESS E TO ROB ${s.type}`;
                  }
                  if(!gameState.current.isRobbing) setHudState(p=>({...p, interactionText: msg}));
-             }
-
-             // Map Overlay
-             if (keys['KeyM']) {
-                  // Handled by UI, simple state toggle is better outside loop usually but here keys works
              }
 
              renderer.render(scene, gameState.current.camera);
@@ -1065,6 +1089,22 @@
              <div ref={mountRef} className="w-full h-full" />
              
              {hudState.wasted && ( <div className="absolute inset-0 z-50 flex items-center justify-center wasted-overlay"><h1 className="text-9xl font-black text-red-600 animate-pulse">WASTED</h1></div> )}
+
+             {hudState.showFullMap && (
+                 <div id="fullmap-overlay" className="absolute inset-0 flex flex-col items-center justify-center p-10">
+                     <h2 className="text-4xl text-blue-500 font-black mb-4 tracking-widest">CITY MAP</h2>
+                     <div className="relative w-full max-w-4xl aspect-square border-4 border-blue-500 bg-black shadow-2xl rounded-xl overflow-hidden">
+                         <canvas ref={fullMapRef} width="1024" height="1024" className="w-full h-full" />
+                     </div>
+                     <div className="flex gap-8 mt-6 text-white font-mono text-xl">
+                         <div className="flex items-center gap-2"><div className="w-4 h-4 bg-white rounded-full"></div> YOU</div>
+                         <div className="flex items-center gap-2"><div className="w-4 h-4 bg-red-500 rounded-full"></div> POLICE</div>
+                         <div className="flex items-center gap-2"><div className="w-4 h-4 bg-gold-500 bg-yellow-400"></div> BANK</div>
+                         <div className="flex items-center gap-2"><div className="w-4 h-4 bg-green-400"></div> STORE</div>
+                     </div>
+                     <div className="mt-8 text-white/50">PRESS M TO CLOSE</div>
+                 </div>
+             )}
 
              <div id="ui-layer" className="flex flex-col justify-between p-6">
                  <div className="flex justify-between items-start">
