@@ -239,6 +239,7 @@
         const gameState = useRef({
           scene: null,
           camera: null,
+          raycaster: new THREE.Raycaster(),
           player: null,
           playerBodyParts: {}, 
           gunMesh: null,
@@ -253,6 +254,7 @@
           planeSpeed: 0,
           planeYVelocity: 0,
           playerYVelocity: 0,
+          isGrounded: true,
           
           // Logic Flags
           inCar: false,
@@ -270,6 +272,7 @@
           wasted: false,
           
           colliders: [], // Boxes
+          environment: [], // Groups for raycasting (Ground, Stairs, etc)
           traffic: [], 
           npcs: [], 
           trafficLights: [],
@@ -616,6 +619,9 @@
           beacon.position.y=150; 
           stGroup.add(beacon);
           scene.add(stGroup);
+          
+          // Environment Raycasting Group
+          gameState.current.environment = [cityGroup, stGroup];
 
           // Train (Enhanced)
           const trainGroup = new THREE.Group();
@@ -854,11 +860,18 @@
               ctx.restore();
           };
 
+          const checkCollision = (newPos) => {
+              for (const box of gameState.current.colliders) {
+                  if (box.containsPoint(newPos)) return true;
+              }
+              return false;
+          };
+
           const update = () => {
              if (gameState.current.wasted) { renderer.render(gameState.current.scene, gameState.current.camera); requestAnimationFrame(update); return; }
              
              const dt = 0.016; 
-             const { player, car, inCar, keys, colliders, playerBodyParts, train, traffic, projectiles, npcs, inTrain, plane, inPlane, heli, scene, shops, particles } = gameState.current;
+             const { player, car, inCar, keys, colliders, playerBodyParts, train, traffic, projectiles, npcs, inTrain, plane, inPlane, heli, scene, shops, particles, raycaster, environment } = gameState.current;
 
              // Minimap
              if (minimapRef.current) {
@@ -1046,17 +1059,52 @@
                  
                  // Jump
                  if (keys['Space']) {
-                      if (player.position.y <= 0.1) gameState.current.playerYVelocity = 0.8;
+                      if (gameState.current.isGrounded) gameState.current.playerYVelocity = 0.8;
                  }
+                 
+                 // Ground Check (Raycast)
+                 const rayOrigin = player.position.clone();
+                 rayOrigin.y += 2; // Start ray above head
+                 raycaster.set(rayOrigin, new THREE.Vector3(0, -1, 0));
+                 const intersects = raycaster.intersectObjects(environment, true);
+                 let groundHeight = 0;
+                 if (intersects.length > 0) {
+                     // Get max height of ground below player
+                     for (let i = 0; i < intersects.length; i++) {
+                         if (intersects[i].point.y < player.position.y + 2) { // Ensure hit is below origin
+                             groundHeight = Math.max(groundHeight, intersects[i].point.y);
+                         }
+                     }
+                 }
+
                  player.position.y += gameState.current.playerYVelocity;
                  gameState.current.playerYVelocity -= 0.04; // Gravity
-                 if (player.position.y < 0) { player.position.y = 0; gameState.current.playerYVelocity = 0; }
+                 
+                 if (player.position.y < groundHeight) {
+                     player.position.y = groundHeight;
+                     gameState.current.playerYVelocity = 0;
+                     gameState.current.isGrounded = true;
+                 } else {
+                     gameState.current.isGrounded = false;
+                 }
 
                  if (dir.length() > 0) {
                      const ang = Math.atan2(dir.x, dir.z);
-                     player.quaternion.slerp(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), ang), 0.2);
-                     player.position.add(dir.normalize().multiplyScalar(speed));
+                     const targetRot = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), ang);
+                     player.quaternion.slerp(targetRot, 0.2);
+                     
+                     const moveVec = dir.normalize().multiplyScalar(speed);
+                     const nextPos = player.position.clone().add(moveVec);
+                     
+                     // Wall Collision Check
+                     if (!checkCollision(nextPos)) {
+                         player.position.x = nextPos.x;
+                         player.position.z = nextPos.z;
+                     }
+
                      const t = Date.now()*0.01; playerBodyParts.leftLeg.rotation.x = Math.sin(t); playerBodyParts.rightLeg.rotation.x = -Math.sin(t);
+                 } else {
+                     playerBodyParts.leftLeg.rotation.x = 0; playerBodyParts.rightLeg.rotation.x = 0;
                  }
                  
                  // Camera logic
