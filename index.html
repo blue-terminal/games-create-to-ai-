@@ -868,7 +868,17 @@
           };
 
           const update = () => {
-             if (gameState.current.wasted) { renderer.render(gameState.current.scene, gameState.current.camera); requestAnimationFrame(update); return; }
+             // Null checks to prevent crashes if scene is not ready
+             if (!gameState.current.player || !gameState.current.scene || !gameState.current.camera) {
+                 requestAnimationFrame(update);
+                 return;
+             }
+
+             if (gameState.current.wasted) { 
+                renderer.render(gameState.current.scene, gameState.current.camera); 
+                requestAnimationFrame(update); 
+                return; 
+             }
              
              const dt = 0.016; 
              const { player, car, inCar, keys, colliders, playerBodyParts, train, traffic, projectiles, npcs, inTrain, plane, inPlane, heli, scene, shops, particles, raycaster, environment } = gameState.current;
@@ -1066,6 +1076,8 @@
                  const rayOrigin = player.position.clone();
                  rayOrigin.y += 2; // Start ray above head
                  raycaster.set(rayOrigin, new THREE.Vector3(0, -1, 0));
+                 raycaster.camera = gameState.current.camera; // REQUIRED for Sprites
+                 
                  const intersects = raycaster.intersectObjects(environment, true);
                  let groundHeight = 0;
                  if (intersects.length > 0) {
